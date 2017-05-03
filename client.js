@@ -30,33 +30,47 @@ function getOptions() {
 		});
 }
 
-function getClubId(dbconfig) {
-	return sql.connect(dbconfig).then(() => 
-		sql.query`select PropValue from dbo.CLUB where PropName = 'CLB_ID_GLOBAL'`
-		).then(result => {
-			sql.close();
-			return result.recordset[0].PropValue || undefined;
-		}).catch(err => {
-			log(err);
-			sql.close();
-		});
+function getCLubID(pool) {
+	return pool.query`select PropValue from dbo.CLUB where PropName = 'CLB_ID_GLOBAL'`
+	.then(result => result.recordset[0].PropValue || undefined)
+	.catch(err => log(err) );
 }
 
-async function init() {
+function getAvailabeEvType(pool) {
+	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
+	.then(res => log(res))
+	.catch(err => log(err));
+}
+
+async function getDbDataOnInit() {
+	config = {user: options["Database-Login"], password: options["Database-Password"],
+			server: "127.0.0.1", database: options["Database-Name"]};
 	try {
-	const halls = await getHalls();
-	log(halls[0]);
-	getOptions();
-	const clubId = await getClubId({user: options["Database-Login"], password: options["Database-Password"],
-		server: "127.0.0.1", database: options["Database-Name"]});
-	log(clubId);
-	return;
+		let pool = await sql.connect(config);
+		let clubId = await getCLubID(pool);
+		let evType = await getAvailabeEvType(pool);
+		pool.close();
+		return result;
 	} catch (e) {
 		log(e);
 	}
 }
 
-init().then(() => log('after init'));
+async function init() {
+	try {
+		const halls = await getHalls();
+		log(halls[0]);
+		getOptions(); // sync function
+		const data = await getDbDataOnInit();
+		// const clubId = await getClubId({user: options["Database-Login"], password: options["Database-Password"],
+		// 	server: "127.0.0.1", database: options["Database-Name"]});
+		return clubId;
+	} catch (e) {
+		log(e);
+	}
+}
+
+init().then((clubId) => log(clubId));
 
 
 // const dbconfig = {
