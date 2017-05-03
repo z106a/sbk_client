@@ -13,5 +13,6 @@
     "es6-promise": "^4.1.0",
     "file-tail": "^0.3.0",
     "isomorphic-fetch": "^2.2.1",
+    "mssql": "^4.0.4"
   }
 }
