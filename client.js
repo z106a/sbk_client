@@ -42,18 +42,23 @@ function getClubId(dbconfig) {
 		});
 }
 
-function init() {
-	let halls = getHalls();
-	halls.then((val) => log(val[0]));
+async function init() {
+	try {
+	const halls = await getHalls();
+	log(halls[0]);
 	getOptions();
-	getClubId({user: options["Database-Login"], password: options["Database-Password"],
-		server: "127.0.0.1", database: options["Database-Name"]})
-		.then(val => log(val));	
+	const clubId = await getClubId({user: options["Database-Login"], password: options["Database-Password"],
+		server: "127.0.0.1", database: options["Database-Name"]});
+	log(clubId);
+	return;
+	} catch (e) {
+		log(e);
+	}
 }
 
-init();
+init().then(() => log('after init'));
 
-log('after init');
+
 // const dbconfig = {
 // 	user: options["Database-Login"],
 // 	password: options["Database-Password"],
