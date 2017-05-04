@@ -2,6 +2,7 @@ const fileTailer = require('file-tail');
 const path = require('path');
 const fs = require('fs');
 const fetch = require('isomorphic-fetch');
+const axios = require('axios');
 const sql = require('mssql');
 require('es6-promise').polyfill();
 
@@ -9,7 +10,8 @@ const optionsBkFilePath = '/Program\ Files\ (x86)/BK/ServerBK/options.cfg';
 const logFilePath = '/Program\ Files\ (x86)/BK/ServerBK/Server.log';
 
 const BACKEND_BASE_URL = 'http://192.168.50.15:3000/api/';
-const HALLS = 'Sbks';
+const HALLS_URL = 'Sbks';
+const EvTYPE_URL = 'EvTypes';
 
 const log = console.log.bind(console);
 
@@ -38,7 +40,7 @@ function getCLubID(pool) {
 
 function getAvailabeEvType(pool) {
 	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
-	.then(res => log(res))
+	.then(res => res.recordset)
 	.catch(err => log(err));
 }
 
@@ -48,9 +50,8 @@ async function getDbDataOnInit() {
 	try {
 		let pool = await sql.connect(config);
 		let clubId = await getCLubID(pool);
-		let evType = await getAvailabeEvType(pool);
-		pool.close();
-		return result;
+		let evTypes = await getAvailabeEvType(pool);
+		return {pool: pool, clubId: clubId, evTypes: evTypes};
 	} catch (e) {
 		log(e);
 	}
@@ -58,40 +59,56 @@ async function getDbDataOnInit() {
 
 async function init() {
 	try {
-		const halls = await getHalls();
-		log(halls[0]);
+		// const halls = await getHalls();
+		// log(halls[0]);
 		getOptions(); // sync function
 		const data = await getDbDataOnInit();
-		// const clubId = await getClubId({user: options["Database-Login"], password: options["Database-Password"],
-		// 	server: "127.0.0.1", database: options["Database-Name"]});
-		return clubId;
+		return data;
 	} catch (e) {
 		log(e);
 	}
 }
+//--------------------------------
+var model_id = undefined;
+init().then(async (init_data) => {
+	log(init_data);
+	let model = await findModelInDb(init_data.clubId); // here we get field 'id'
+	if (model) {
+		model_id = model.id
+		log(model.id);
+		await patchData(model.id, {'enabled_events_type': init_data.evTypes});
+		await getLastEvTypeStatus(init_data.pool);
+		ft = fileTailer.startTailing(logFilePath);
+		ft.on('line', async (line) => (await patchData(model.id, {'bk_server_log': line})) );
+	}
+	init_data.pool.close();
+});
+//--------------------------------
+function findModelInDb(id_hall) {
+	return fetch(`${BACKEND_BASE_URL}${HALLS_URL}/findOne?filter[where][id_hall]=${id_hall}`)
+		.then(resp => resp.json()).then(model => {
+			return model.error ? undefined : model;
+		}).catch(e=>log(e));
+}
 
-init().then((clubId) => log(clubId));
+function patchData(id, val) {
+	let header = 'Content-Type: application/json'
+	return axios.patch(`${BACKEND_BASE_URL}${HALLS_URL}/${id}`, 
+		val)
+		.then(() => log('patchSuccess'))
+		.catch(e => log(e));
+}
 
+function getLastEvTypeStatus(pool) {
+	return pool.query`select top 1 l.STLOG_ID, t.NAME, s.ST_NAME, l.STLOG_DATE, l.REMOVED
+		from EVSRC_STATE_LOG l
+			inner join EVENT_TYPE t on l.EVT_TYPE = t.ID
+			inner join EVSRC_STATE s on l.STLOG_STATE = s.ST_ID
+		order by STLOG_DATE desc`.then(res => putEvTypeStatus(res.recordset[0]));
+}
 
-// const dbconfig = {
-// 	user: options["Database-Login"],
-// 	password: options["Database-Password"],
-// 	server: "127.0.0.1",
-// 	database: options["Database-Name"]
-// }
+function putEvTypeStatus(data) {
+	data.sbk_fk = model_id;
+	axios.put(`${BACKEND_BASE_URL}${EvTYPE_URL}`, data).catch(e => log(e));
+}
 
-// const res = sql.connect(dbconfig).then(() => {
-// 	return sql.query`select PropValue from dbo.CLUB where PropName = 'CLB_ID_GLOBAL'`;
-// }).then(result => {
-// 	sql.close();
-// 	return result.recordset[0].PropValue || undefined;
-// }).catch(err => {
-// 	log(err);
-// 	sql.close();
-// });
-
-// res.then((s) => log(s));
-// sql.on('error', err => log(err));
-
-// ft = fileTailer.startTailing(logFilePath);
-// ft.on('line', (line) => log(line));
