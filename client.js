@@ -91,26 +91,27 @@ init().then(async (init_data) => {
 		model_id = model.id // set global model_id
 		await patchData(model.id, {'enabled_events_type': init_data.evTypes});
 		await getLastEvTypeStatus(init_data.pool);
-		init_data.PCUrl && interval(init_data.PCUrl, 30000);
-		init_data.EvSrcAddrWeather && interval(init_data.EvSrcAddrWeather, 30000);
-		init_data.EvSrcAddrFlight && interval(init_data.EvSrcAddrFlight, 30000);
+		init_data.PCUrl && interval(init_data.PCUrl, 'PC', 30000);
+		init_data.EvSrcAddrWeather && interval(init_data.EvSrcAddrWeather, 'EvSrcWeather', 30000);
+		init_data.EvSrcAddrFlight && interval(init_data.EvSrcAddrFlight, 'EvSrcFlight', 30000);
 
 		// 
-		// ft = fileTailer.startTailing(logFilePath);
-		// ft.on('line', async (line) => (await patchData(model.id, {'bk_server_log': line})) );
+		ft = fileTailer.startTailing(logFilePath);
+		ft.on('line', async (line) => (await patchData(model.id, {'bk_server_log': line})) );
 	}
 	init_data.pool.close();
 });
 //--------------------------------
-function interval(ip, tick){
-	return setInterval(pingSomewhat.bind(this, ip), tick)
+function interval(ip, name, tick){
+	return setInterval(pingSomewhat.bind(this, ip, name), tick)
 }
 
-function pingSomewhat(ip) {
+function pingSomewhat(ip, name) {
 	log(String(ip));
 	exec(`chcp 65001 |ping ${ip}`, (error, stdout, stderr) => {
 		putNetworkTests({ip: ip.replace(/\./g, '_'),
-		 result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n')});		
+		 result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'), 
+		 name: name, dt: new Date()});		
 	});
 }
 
