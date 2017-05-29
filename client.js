@@ -1,3 +1,4 @@
+const cote = require('cote');
 const fileTailer = require('file-tail');
 const path = require('path');
 const fs = require('fs');
@@ -7,6 +8,7 @@ const sql = require('mssql');
 const exec = require('child_process').exec;
 require('es6-promise').polyfill();
 
+const publisher = new cote.Publisher({name: 'sbk publisher'});
 const optionsBkFilePath = '/Program\ Files\ (x86)/BK/ServerBK/options.cfg';
 const logFilePath = '/Program\ Files\ (x86)/BK/ServerBK/Server.log';
 
@@ -19,38 +21,38 @@ const log = console.log.bind(console);
 
 const options = {};
 
-function getHalls() {
-	return fetch(BACKEND_BASE_URL+HALLS).then((resp) => resp.json()).catch(err => log(err));
-}
+const sbk_data = {
+		sbkId: '',
+		enabled_events_type: '',
+		lastEvTypeStatus: '',
+		ping_result: {},
+		err: []
+	}
 
 function getOptions() {
-	optionFile = fs.readFileSync(optionsBkFilePath, [null, 'r']);
-	optionFile.toString().split("\n")
-		.map((line) => {
-			let parsed_line = line.split("=");
-			if (parsed_line[0] && parsed_line[1]) {
-				options[parsed_line[0].trim()] = parsed_line[1].trim();
-			}
-		});
+	try {
+		optionFile = fs.readFileSync(optionsBkFilePath, [null, 'r']);
+		optionFile.toString().split("\n")
+			.map((line) => {
+				let parsed_line = line.split("=");
+				if (parsed_line[0] && parsed_line[1]) {
+					options[parsed_line[0].trim()] = parsed_line[1].trim();
+				}
+			});
+	} catch(e) { sbk_data.err = e; }
 }
 
 function getCLubID(pool) {
 	return pool.query`select PropValue from dbo.CLUB where PropName = 'CLB_ID_GLOBAL'`
 	.then(result => result.recordset[0].PropValue || undefined)
-	.catch(err => log(err) );
-}
-
-function getAvailabeEvType(pool) {
-	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
-	.then(res => res.recordset)
-	.catch(err => log(err));
+	.catch(err => sbk_data.err.push(err) );
 }
 
 function getPCUrl(pool) {
 	ip_match_re = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
 	return pool.query`select PropValue from dbo.CLUB where PropName = 'PROCESSING_CENTER_API_URL'`
 	.then(res => res.recordset[0].PropValue.match(ip_match_re)[0] || undefined)
-	.catch(err => log(err));
+	.catch(err => sbk_data.err.push(err));
 }
 
 async function getDbDataOnInit() {
@@ -59,76 +61,72 @@ async function getDbDataOnInit() {
 	try {
 		let pool = await sql.connect(config);
 		let clubId = await getCLubID(pool);
-		let evTypes = await getAvailabeEvType(pool);
+		await getAvailabeEvType(pool);
+		await getLastEvTypeStatus(pool);
 		let PCUrl = await getPCUrl(pool);
+
 		return {
-			pool: pool, clubId: clubId, evTypes: evTypes, PCUrl: PCUrl,
+			pool: pool, clubId: clubId, PCUrl: PCUrl,
 			EvSrcAddrFlight: options["EventSourceAddressFlight"],
 			EvSrcAddrWeather: options["EventSourceAddressWeather"]
 		};
 	} catch (e) {
-		log(e);
+		sbk_data.err.push(err);
 	}
 }
 
 async function init() {
 	try {
-		// const halls = await getHalls();
-		// log(halls[0]);
 		getOptions(); // sync function
 		const data = await getDbDataOnInit();
 		return data;
 	} catch (e) {
-		log(e);
+		sbk_data.err.push(err);
 	}
 }
 
 //--------------------------------
-let model_id = undefined;
+
+setInterval(function(){publisher.publish('sbk data', sbk_data)}, 5000);
+
 init().then(async (init_data) => {
-	let model = await findModelInDb(init_data.clubId); // here we get field 'id'
-	if (model) {
-		model_id = model.id // set global model_id
-		await patchData(model.id, {'enabled_events_type': init_data.evTypes});
-		await getLastEvTypeStatus(init_data.pool);
-		init_data.PCUrl && interval(init_data.PCUrl, 'PC', 30000);
-		init_data.EvSrcAddrWeather && interval(init_data.EvSrcAddrWeather, 'EvSrcWeather', 30000);
-		init_data.EvSrcAddrFlight && interval(init_data.EvSrcAddrFlight, 'EvSrcFlight', 30000);
+	sbk_data.sbkId = init_data.clubId;
+	setTimeout(getAvailabeEvType.bind(this, init_data.pool), 1000 * 60 * 60); // 1 hour
+	setTimeout(getLastEvTypeStatus.bind(this, init_data.pool), 1000 * 60 * 5); // 5 min
+	init_data.PCUrl && interval(init_data.PCUrl, 'PC', 30000);
+	init_data.EvSrcAddrWeather && interval(init_data.EvSrcAddrWeather, 'EvSrcWeather', 30000);
+	init_data.EvSrcAddrFlight && interval(init_data.EvSrcAddrFlight, 'EvSrcFlight', 30000);
 
 		// 
 		ft = fileTailer.startTailing(logFilePath);
-		ft.on('line', async (line) => (await patchData(model.id, {'bk_server_log': line})) );
-	}
+		ft.on('line', (line) => {
+			publisher.publish('sbk log', line);
+			// let split = line.split('|');
+			// await postSbkLog(model.id, {'text': line, 'level': split[1]})
+
+		} );
+	// }
 	init_data.pool.close();
 });
 //--------------------------------
+function getAvailabeEvType(pool) {
+	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
+	.then(res => sbk_data.enabled_events_type = res.recordset)
+	.catch(err => sbk_data.err.push(err));
+}
+
 function interval(ip, name, tick){
 	return setInterval(pingSomewhat.bind(this, ip, name), tick)
 }
 
 function pingSomewhat(ip, name) {
-	log(String(ip));
 	exec(`chcp 65001 |ping ${ip}`, (error, stdout, stderr) => {
-		putNetworkTests({ip: ip.replace(/\./g, '_'),
-		 result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'), 
-		 name: name, dt: new Date()});		
+		sbk_data.ping_result[name] = {
+			ip:  ip.replace(/\./g, '_'),
+			result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'),
+			dt: new Date().toString()
+		};	
 	});
-}
-
-function findModelInDb(id_hall) {
-	return fetch(`${BACKEND_BASE_URL}${HALLS_URL}/findOne?filter[where][id_hall]=${id_hall}`)
-		.then(resp => resp.json()).then(model => {
-			return model.error ? undefined : model;
-		}).catch(e=>log(e));
-}
-
-function patchData(id, val) {
-	let header = 'Content-Type: application/json';
-	log(val);
-	return axios.patch(`${BACKEND_BASE_URL}${HALLS_URL}/${id}`, 
-		val)
-		.then(() => log('patchSuccess'))
-		.catch(e => log(e));
 }
 
 function getLastEvTypeStatus(pool) {
@@ -136,16 +134,7 @@ function getLastEvTypeStatus(pool) {
 		from EVSRC_STATE_LOG l
 			inner join EVENT_TYPE t on l.EVT_TYPE = t.ID
 			inner join EVSRC_STATE s on l.STLOG_STATE = s.ST_ID
-		order by STLOG_DATE desc`.then(res => putEvTypeStatus(res.recordset[0]));
-}
-
-function putEvTypeStatus(data) {
-	data.sbk_fk = model_id;
-	axios.put(`${BACKEND_BASE_URL}${EvTYPE_URL}`, data).catch(e => log(e));
-}
-
-function putNetworkTests(data) {
-	data.sbk_fk = model_id;
-	axios.patch(`${BACKEND_BASE_URL}${NetworkTests_URL}`, data).catch(e => log(e));
+		order by STLOG_DATE desc`.then(res => sbk_data.lastEvTypeStatus = res.recordset[0])
+		.catch(err => sbk_data.err.push(err));
 }
 
