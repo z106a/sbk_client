@@ -23,6 +23,7 @@ const options = {};
 
 const sbk_data = {
 		sbkId: '',
+		id_seus: '',
 		enabled_events_type: '',
 		lastEvTypeStatus: '',
 		ping_result: {},
@@ -55,6 +56,16 @@ function getPCUrl(pool) {
 	.catch(err => sbk_data.err.push(err));
 }
 
+function getSbkSeusId(ip) {
+	switch(ip.split('.')[3]) {
+		case '11': return 4
+		case '21': return 5
+		case '31': return 6
+		case '41': return 7
+		case '51': return 8
+	}
+}
+
 async function getDbDataOnInit() {
 	config = {user: options["Database-Login"], password: options["Database-Password"],
 			server: "127.0.0.1", database: options["Database-Name"]};
@@ -64,6 +75,7 @@ async function getDbDataOnInit() {
 		await getAvailabeEvType(pool);
 		await getLastEvTypeStatus(pool);
 		let PCUrl = await getPCUrl(pool);
+		sbk_data.id_seus = getSbkSeusId(PCUrl);
 
 		return {
 			pool: pool, clubId: clubId, PCUrl: PCUrl,
@@ -71,6 +83,7 @@ async function getDbDataOnInit() {
 			EvSrcAddrWeather: options["EventSourceAddressWeather"]
 		};
 	} catch (e) {
+		console.log(err);
 		sbk_data.err.push(err);
 	}
 }
@@ -81,38 +94,42 @@ async function init() {
 		const data = await getDbDataOnInit();
 		return data;
 	} catch (e) {
+		console.log(e);
 		sbk_data.err.push(err);
 	}
 }
 
 //--------------------------------
 
-setInterval(function(){publisher.publish('sbk data', sbk_data)}, 5000);
+// setInterval(function(){publisher.publish('sbk data', sbk_data)}, 5000);
 
-init().then(async (init_data) => {
+init().then(init_data => {
 	sbk_data.sbkId = init_data.clubId;
-	setTimeout(getAvailabeEvType.bind(this, init_data.pool), 1000 * 60 * 60); // 1 hour
-	setTimeout(getLastEvTypeStatus.bind(this, init_data.pool), 1000 * 60 * 5); // 5 min
+	setInterval(getAvailabeEvType.bind(this, init_data.pool), 1000 * 60 * 60); // 1 hour
+	setInterval(getLastEvTypeStatus.bind(this, init_data.pool), 1000 * 60 * 5); // 5 min
 	init_data.PCUrl && interval(init_data.PCUrl, 'PC', 30000);
 	init_data.EvSrcAddrWeather && interval(init_data.EvSrcAddrWeather, 'EvSrcWeather', 30000);
 	init_data.EvSrcAddrFlight && interval(init_data.EvSrcAddrFlight, 'EvSrcFlight', 30000);
 
 		// 
 		ft = fileTailer.startTailing(logFilePath);
+		let log_arr = [];
 		ft.on('line', (line) => {
-			publisher.publish('sbk log', line);
-			// let split = line.split('|');
-			// await postSbkLog(model.id, {'text': line, 'level': split[1]})
-
-		} );
+			let split = line.split('|');
+			log_arr.push({level: split[1], 'text': line});
+			if (log_arr.length === 500) {
+				publisher.publish('sbk log', [init_data.clubId, log_arr]);
+				log_arr.length = 0;
+			}
+		});
 	// }
-	init_data.pool.close();
+	// init_data.pool.close();
 });
 //--------------------------------
 function getAvailabeEvType(pool) {
 	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
-	.then(res => sbk_data.enabled_events_type = res.recordset)
-	.catch(err => sbk_data.err.push(err));
+	.then(res => publisher.publish('AvailableEvTypes', [sbk_data.sbkId, res.recordset]))
+	.catch(err => {console.log(err); sbk_data.err.push(err)});
 }
 
 function interval(ip, name, tick){
@@ -121,20 +138,29 @@ function interval(ip, name, tick){
 
 function pingSomewhat(ip, name) {
 	exec(`chcp 65001 |ping ${ip}`, (error, stdout, stderr) => {
-		sbk_data.ping_result[name] = {
-			ip:  ip.replace(/\./g, '_'),
-			result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'),
-			dt: new Date().toString()
-		};	
+		publisher.publish('network test', [sbk_data.sbkId, 
+			{
+				name: name, ip:  ip.replace(/\./g, '_'),
+				result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'),
+				dt: new Date().toString()
+			}]);
+		// sbk_data.ping_result[name] = {
+		// 	ip:  ip.replace(/\./g, '_'),
+		// 	result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'),
+		// 	dt: new Date().toString()
+		// };	
 	});
 }
 
 function getLastEvTypeStatus(pool) {
+	console.log('getLastEvTypeStatus');
 	return pool.query`select top 1 l.STLOG_ID, t.NAME, s.ST_NAME, l.STLOG_DATE, l.REMOVED
 		from EVSRC_STATE_LOG l
 			inner join EVENT_TYPE t on l.EVT_TYPE = t.ID
 			inner join EVSRC_STATE s on l.STLOG_STATE = s.ST_ID
-		order by STLOG_DATE desc`.then(res => sbk_data.lastEvTypeStatus = res.recordset[0])
-		.catch(err => sbk_data.err.push(err));
+		order by STLOG_DATE desc`
+		.then(res => {
+			publisher.publish('EvTypeStatus', [sbk_data.sbkId, res.recordset[0]])} )
+		.catch(err => {console.log(err); sbk_data.err.push(err)});
 }
 
