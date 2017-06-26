@@ -13,6 +13,7 @@
     "cote": "^0.13.2",
     "es6-promise": "^4.1.0",
     "file-tail": "^0.3.0",
-    "mssql": "^4.0.4"
+    "mssql": "^4.0.4",
+    "node-windows": "^0.1.14"
   }
 }
