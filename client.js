@@ -1,4 +1,5 @@
-const cote = require("cote");
+//const cote = require("cote");
+const socket = require('socket.io-client')('http://192.168.50.15:3000');
 const fileTailer = require("file-tail");
 const path = require("path");
 const fs = require("fs");
@@ -9,16 +10,18 @@ const EventLogger = require('node-windows').EventLogger;
 
 const log = new EventLogger('SBK Live Monitoring');
 
-const publisher = new cote.Publisher({ name: "sbk publisher" });
+//const publisher = new cote.Publisher({ name: "sbk publisher" });
 const optionsBkFilePath = "/Program Files (x86)/BK/ServerBK/options.cfg";
 const logFilePath = "/Program Files (x86)/BK/ServerBK/Server.log";
 
-const BACKEND_BASE_URL = "http://192.168.50.15:3000/api/";
-const HALLS_URL = "Sbks";
-const EvTYPE_URL = "EvTypes";
-const NetworkTests_URL = "NetworkTests";
+//const BACKEND_BASE_URL = "http://192.168.50.15:3000/api/";
+//const HALLS_URL = "Sbks";
+//const EvTYPE_URL = "EvTypes";
+//const NetworkTests_URL = "NetworkTests";
 
 //const log = console.log.bind(console);
+
+//socket.on('connect', () => console.log('socket connect'));
 
 const options = {};
 
@@ -144,15 +147,20 @@ init().then(init_data => {
 
 		log_arr.push({ level: split[1], text: line });
 		if (log_arr.length === 500) {
-			publisher.publish("sbk log", [
+
+			socket.emit("sbk log", [
 				`${sbk_data.sbkId}_${sbk_data.seusId}`,
 				log_arr
 			]);
+			// publisher.publish("sbk log", [
+			// 	`${sbk_data.sbkId}_${sbk_data.seusId}`,
+			// 	log_arr
+			// ]);
 			log_arr.length = 0;
 		}
 
 		if (split[1] === "Error") {
-			publisher.publish("sbk log err", [
+			socket.emit("sbk log err", [
 				sbk_data.sbkId,
 				sbk_data.seusId,
 				line
@@ -166,7 +174,7 @@ init().then(init_data => {
 function getAvailabeEvType(pool) {
 	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
 		.then(res =>
-			publisher.publish("AvailableEvTypes", [
+			socket.emit("AvailableEvTypes", [
 				`${sbk_data.sbkId}_${sbk_data.seusId}`,
 				res.recordset
 			])
@@ -180,7 +188,7 @@ function getAvailabeEvType(pool) {
 function getSBkVersionFromDb(pool) {
 	return pool.query`select TOP 1 DBV_VERSION from dbo.DBVERSION ORDER BY DBV_ID DESC`
 		.then(res => {
-			publisher.publish('sbk_version', [sbk_data.sbkId, sbk_data.seusId, res.recordset[0]])
+			socket.emit('sbk_version', [sbk_data.sbkId, sbk_data.seusId, res.recordset[0]])
 		}
 		)
 		.catch(err => {
@@ -195,7 +203,7 @@ function interval(ip, name, tick) {
 
 function pingSomewhat(ip, name) {
 	exec(`chcp 65001 |ping ${ip}`, (error, stdout, stderr) => {
-		publisher.publish("network test", [
+		socket.emit("network test", [
 			`${sbk_data.sbkId}_${sbk_data.seusId}`,
 			{
 				name: name,
@@ -217,7 +225,7 @@ function getLastEvTypeStatus(pool) {
 			inner join EVSRC_STATE s on l.STLOG_STATE = s.ST_ID
 		order by STLOG_DATE desc`
 		.then(res => {
-			publisher.publish("EvTypeStatus", [
+			socket.emit("EvTypeStatus", [
 				sbk_data.sbkId,
 				sbk_data.seusId,
 				{evTypeStatus: res.recordset}
