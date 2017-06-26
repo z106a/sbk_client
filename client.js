@@ -18,7 +18,7 @@ const HALLS_URL = "Sbks";
 const EvTYPE_URL = "EvTypes";
 const NetworkTests_URL = "NetworkTests";
 
-const log = console.log.bind(console);
+//const log = console.log.bind(console);
 
 const options = {};
 
