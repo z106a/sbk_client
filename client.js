@@ -5,6 +5,9 @@ const fs = require("fs");
 const sql = require("mssql");
 const exec = require("child_process").exec;
 require("es6-promise").polyfill();
+const EventLogger = require('node-windows').EventLogger;
+
+const log = new EventLogger('SBK Live Monitoring');
 
 const publisher = new cote.Publisher({ name: "sbk publisher" });
 const optionsBkFilePath = "/Program Files (x86)/BK/ServerBK/options.cfg";
@@ -39,13 +42,14 @@ function getOptions() {
 		});
 	} catch (e) {
 		sbk_data.err = e;
+		log.error(e);
 	}
 }
 
 function getCLubID(pool) {
 	return pool.query`select PropValue from dbo.CLUB where PropName = 'CLB_ID_GLOBAL'`
 		.then(result => result.recordset[0].PropValue || undefined)
-		.catch(err => sbk_data.err.push(err));
+		.catch(err => {sbk_data.err.push(err); log.error(err);});
 }
 
 function getPCUrl(pool) {
@@ -54,7 +58,7 @@ function getPCUrl(pool) {
 		.then(
 			res => res.recordset[0].PropValue.match(ip_match_re)[0] || undefined
 		)
-		.catch(err => sbk_data.err.push(err));
+		.catch(err => {sbk_data.err.push(err);log.error(err);});
 }
 
 function getSbkSeusId(ip) {
@@ -95,6 +99,7 @@ async function getDbDataOnInit() {
 		};
 	} catch (e) {
 		sbk_data.err.push(err);
+		log.error(e);
 	}
 }
 
@@ -104,7 +109,7 @@ async function init() {
 		const data = await getDbDataOnInit();
 		return data;
 	} catch (e) {
-		console.log(e);
+		log.error(e);
 		sbk_data.err.push(err);
 	}
 }
@@ -167,7 +172,7 @@ function getAvailabeEvType(pool) {
 			])
 		)
 		.catch(err => {
-			console.log(err);
+			log.error(err);
 			sbk_data.err.push(err);
 		});
 }
@@ -179,7 +184,7 @@ function getSBkVersionFromDb(pool) {
 		}
 		)
 		.catch(err => {
-			console.log(err);
+			log.error(err);
 			sbk_data.err.push(err);
 		});
 }
@@ -202,11 +207,6 @@ function pingSomewhat(ip, name) {
 				dt: new Date().toString()
 			}
 		]);
-		// sbk_data.ping_result[name] = {
-		// 	ip:  ip.replace(/\./g, '_'),
-		// 	result: stdout.replace(/[\n\r]+/g, '\n') || stderr.replace(/[\n\r]+/g, '\n') || error.replace(/[\n\r]+/g, '\n'),
-		// 	dt: new Date().toString()
-		// };
 	});
 }
 
@@ -224,7 +224,7 @@ function getLastEvTypeStatus(pool) {
 			]);
 		})
 		.catch(err => {
-			console.log(err);
+			log.error(err);
 			sbk_data.err.push(err);
 		});
 }
