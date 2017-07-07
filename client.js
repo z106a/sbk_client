@@ -1,5 +1,4 @@
 //const cote = require("cote");
-const socket = require('socket.io-client')('http://192.168.50.15:3000');
 const fileTailer = require("file-tail");
 const path = require("path");
 const fs = require("fs");
@@ -7,8 +6,8 @@ const sql = require("mssql");
 const exec = require("child_process").exec;
 require("es6-promise").polyfill();
 const EventLogger = require('node-windows').EventLogger;
-
 const log = new EventLogger('SBK Live Monitoring');
+const socket = require('socket.io-client')('http://192.168.50.15:3000');
 
 //const publisher = new cote.Publisher({ name: "sbk publisher" });
 const optionsBkFilePath = "/Program Files (x86)/BK/ServerBK/options.cfg";
@@ -91,7 +90,9 @@ async function getDbDataOnInit() {
 		let clubId = await getCLubID(pool);
 		let PCUrl = await getPCUrl(pool);
 		let id_seus = getSbkSeusId(PCUrl);
-
+		socket.on('connect', function(){
+			socket.emit("clubRegister", clubId);
+		});
 		return {
 			pool: pool,
 			clubId: clubId,
@@ -106,7 +107,7 @@ async function getDbDataOnInit() {
 	}
 }
 
-async function init() {
+ async function  init() {
 	try {
 		getOptions(); // sync function
 		const data = await getDbDataOnInit();
