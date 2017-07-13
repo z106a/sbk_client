@@ -5,7 +5,7 @@ const fs = require("fs");
 const sql = require("mssql");
 const exec = require("child_process").exec;
 require("es6-promise").polyfill();
-var sc = require("windows-service-controller");
+//var sc = require("windows-service-controller");
 const EventLogger = require("node-windows").EventLogger;
 const log = new EventLogger("SBK Live Monitoring");
 const socket = require("socket.io-client")("http://192.168.50.15:3000");
@@ -31,7 +31,8 @@ const sbk_data = {
 	enabled_events_type: "",
 	lastEvTypeStatus: "",
 	ping_result: {},
-	err: []
+	err: [],
+	timeouts: []
 };
 
 function getOptions() {
@@ -133,32 +134,32 @@ init().then(init_data => {
 	sbk_data.sbkId = init_data.clubId;
 	sbk_data.seusId = init_data.seusId;
 
+	// process.on('exit', exitHandler.bind(this));
+	// process.on('SIGINT', exitHandler.bind(this));
+	// process.on('uncaughtException', exitHandler.bind(this));
+
 	setTimeout(getSBkVersionFromDb.bind(this, init_data.pool), 3000); // wait for cote publisher
 	setTimeout(getAvailabeEvType.bind(this, init_data.pool), 3100);
 	setTimeout(getLastEvTypeStatus.bind(this, init_data.pool), 3200);
 
-	setInterval(getAvailabeEvType.bind(this, init_data.pool), 1000 * 60 * 1); // 1 min
-	setInterval(getLastEvTypeStatus.bind(this, init_data.pool), 1000 * 60 * 1); // 1 min
-	setInterval(
+	sbk_data.timeouts.push(setInterval(getAvailabeEvType.bind(this, init_data.pool), 1000 * 60 * 1)); // 1 min
+	sbk_data.timeouts.push(setInterval(getLastEvTypeStatus.bind(this, init_data.pool), 1000 * 60 * 1)); // 1 min
+	sbk_data.timeouts.push(setInterval(
 		getSBkVersionFromDb.bind(this, init_data.pool),
 		1000 * 60 * 60 * 24
-	); // once a day
+	)); // once a day
 
 	//setInterval(handler: any, timeout?: long, arguments...: any)
-	setInterval(getScStatus.bind(this, "Tomcat8"), 1000 * 30); // 30 sec
-	setInterval(getScStatus.bind(this, "MSSQLSERVER"), 1000 * 30);
-	setInterval(getScStatus.bind(this, ".ServerBK"), 1000 * 30);
+	sbk_data.timeouts.push(setInterval(getScStatus.bind(this, "Tomcat8"), 1000 * 30)); // 30 sec
+	sbk_data.timeouts.push(setInterval(getScStatus.bind(this, "MSSQLSERVER"), 1000 * 30));
+	sbk_data.timeouts.push(setInterval(getScStatus.bind(this, ".ServerBK"), 1000 * 30));
 
 	socket.on("exec_service_cmd", data => {
 		if (
 			+sbk_data.sbkId === +data.sbk_id &&
 			+sbk_data.seusId === +data.seus_id
 		) {
-			if (data.cmd === 'Stop') {
-				sc.stop(data.name, {waitForExit: false});
-			} else if (data.cmd === 'Start') {
-				sc.start(data.name);
-			}
+			execWinServiceCmd(data.name, data.cmd); // start or stop
 		}
 	});
 
@@ -197,21 +198,50 @@ init().then(init_data => {
 //--------------------------------
 
 function getScStatus(name) {
-	sc
-		.query({ name: name })
-		.catch(function(err) {
-			log.error(err);
-			sbk_data.err.push(err);
-		})
-		.done(function(services) {
-			socket.emit("win services", [
-				`${sbk_data.sbkId}_${sbk_data.seusId}`,
-				{
-					serviceName: name,
-					log: services
-				}
-			]);
-		});
+	exec(`chcp 65001 |sc query ${name}`, (error, stdout, stderr) => {
+		try {
+			const first_part = stdout.match(/state.*/ig);
+			if (first_part && first_part.length > 0) {
+				const log = first_part[0].split(":")[1].match(/\w+/ig)[1];
+				socket.emit("win services", [
+					`${sbk_data.sbkId}_${sbk_data.seusId}`,
+						{
+							serviceName: name,
+							log: log
+						}	
+				]);		
+			}
+			
+		} catch(e) {
+			console.log(e);
+			log.info(e);
+		}
+	});
+
+function execWinServiceCmd(name, cmd) {
+	exec(`chcp 65001 |sc cmd ${name}`, (error, stdout, stderr) => {
+		error && log.error(error);
+	});
+}
+
+	// sc
+	// 	.query({ name: name })
+	// 	// .catch(function(err) {
+	// 	// 	log.error(err);
+	// 	// 	sbk_data.err.push(err);
+	// 	// })
+	// 	.catch(e => console.log(e))
+	// 	.done(function(services) {
+			
+	// 		log.info(services);
+	// 		socket.emit("win services", [
+	// 			`${sbk_data.sbkId}_${sbk_data.seusId}`,
+	// 			{
+	// 				serviceName: name,
+	// 				log: services
+	// 			}
+	// 		]);
+	// 	});
 }
 
 function getAvailabeEvType(pool) {
@@ -281,4 +311,12 @@ function getLastEvTypeStatus(pool) {
 			log.error(err);
 			sbk_data.err.push(err);
 		});
+}
+
+
+function exitHandler(){
+	sbk_data.timeouts.map( val => 
+		clearInterval(val)
+	);
+	process.exit();
 }
