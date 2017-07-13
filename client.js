@@ -5,9 +5,10 @@ const fs = require("fs");
 const sql = require("mssql");
 const exec = require("child_process").exec;
 require("es6-promise").polyfill();
-const EventLogger = require('node-windows').EventLogger;
-const log = new EventLogger('SBK Live Monitoring');
-const socket = require('socket.io-client')('http://192.168.50.15:3000');
+var sc = require("windows-service-controller");
+const EventLogger = require("node-windows").EventLogger;
+const log = new EventLogger("SBK Live Monitoring");
+const socket = require("socket.io-client")("http://192.168.50.15:3000");
 
 //const publisher = new cote.Publisher({ name: "sbk publisher" });
 const optionsBkFilePath = "/Program Files (x86)/BK/ServerBK/options.cfg";
@@ -51,7 +52,10 @@ function getOptions() {
 function getCLubID(pool) {
 	return pool.query`select PropValue from dbo.CLUB where PropName = 'CLB_ID_GLOBAL'`
 		.then(result => result.recordset[0].PropValue || undefined)
-		.catch(err => {sbk_data.err.push(err); log.error(err);});
+		.catch(err => {
+			sbk_data.err.push(err);
+			log.error(err);
+		});
 }
 
 function getPCUrl(pool) {
@@ -60,7 +64,10 @@ function getPCUrl(pool) {
 		.then(
 			res => res.recordset[0].PropValue.match(ip_match_re)[0] || undefined
 		)
-		.catch(err => {sbk_data.err.push(err);log.error(err);});
+		.catch(err => {
+			sbk_data.err.push(err);
+			log.error(err);
+		});
 }
 
 function getSbkSeusId(ip) {
@@ -90,7 +97,7 @@ async function getDbDataOnInit() {
 		let clubId = await getCLubID(pool);
 		let PCUrl = await getPCUrl(pool);
 		let id_seus = getSbkSeusId(PCUrl);
-		socket.on('connect', function(){
+		socket.on("connect", function() {
 			socket.emit("clubRegister", clubId);
 		});
 		return {
@@ -107,7 +114,7 @@ async function getDbDataOnInit() {
 	}
 }
 
- async function  init() {
+async function init() {
 	try {
 		getOptions(); // sync function
 		const data = await getDbDataOnInit();
@@ -125,15 +132,36 @@ async function getDbDataOnInit() {
 init().then(init_data => {
 	sbk_data.sbkId = init_data.clubId;
 	sbk_data.seusId = init_data.seusId;
-	
-	setTimeout(getSBkVersionFromDb.bind(this, init_data.pool), 3000); // wait for cote publisher 
+
+	setTimeout(getSBkVersionFromDb.bind(this, init_data.pool), 3000); // wait for cote publisher
 	setTimeout(getAvailabeEvType.bind(this, init_data.pool), 3100);
 	setTimeout(getLastEvTypeStatus.bind(this, init_data.pool), 3200);
 
 	setInterval(getAvailabeEvType.bind(this, init_data.pool), 1000 * 60 * 1); // 1 min
 	setInterval(getLastEvTypeStatus.bind(this, init_data.pool), 1000 * 60 * 1); // 1 min
-	setInterval(getSBkVersionFromDb.bind(this, init_data.pool), 1000 * 60 * 60 * 24); // once a day
-	
+	setInterval(
+		getSBkVersionFromDb.bind(this, init_data.pool),
+		1000 * 60 * 60 * 24
+	); // once a day
+
+	//setInterval(handler: any, timeout?: long, arguments...: any)
+	setInterval(getScStatus.bind(this, "Tomcat8"), 1000 * 30); // 30 sec
+	setInterval(getScStatus.bind(this, "MSSQLSERVER"), 1000 * 30);
+	setInterval(getScStatus.bind(this, ".ServerBK"), 1000 * 30);
+
+	socket.on("exec_service_cmd", data => {
+		if (
+			+sbk_data.sbkId === +data.sbk_id &&
+			+sbk_data.seusId === +data.seus_id
+		) {
+			if (data.cmd === 'Stop') {
+				sc.stop(data.name, {waitForExit: false});
+			} else if (data.cmd === 'Start') {
+				sc.start(data.name);
+			}
+		}
+	});
+
 	init_data.PCUrl && interval(init_data.PCUrl, "PC", 30000);
 	init_data.EvSrcAddrWeather &&
 		interval(init_data.EvSrcAddrWeather, "EvSrcWeather", 30000);
@@ -148,7 +176,6 @@ init().then(init_data => {
 
 		log_arr.push({ level: split[1], text: line });
 		if (log_arr.length === 500) {
-
 			socket.emit("sbk log", [
 				`${sbk_data.sbkId}_${sbk_data.seusId}`,
 				log_arr
@@ -161,17 +188,32 @@ init().then(init_data => {
 		}
 
 		if (split[1] === "Error") {
-			socket.emit("sbk log err", [
-				sbk_data.sbkId,
-				sbk_data.seusId,
-				line
-			]);
+			socket.emit("sbk log err", [sbk_data.sbkId, sbk_data.seusId, line]);
 		}
 	});
 	// }
 	// init_data.pool.close();
 });
 //--------------------------------
+
+function getScStatus(name) {
+	sc
+		.query({ name: name })
+		.catch(function(err) {
+			log.error(err);
+			sbk_data.err.push(err);
+		})
+		.done(function(services) {
+			socket.emit("win services", [
+				`${sbk_data.sbkId}_${sbk_data.seusId}`,
+				{
+					serviceName: name,
+					log: services
+				}
+			]);
+		});
+}
+
 function getAvailabeEvType(pool) {
 	return pool.query`select NAME from dbo.EVENT_TYPE where AVAILABLE = '1'`
 		.then(res =>
@@ -189,9 +231,12 @@ function getAvailabeEvType(pool) {
 function getSBkVersionFromDb(pool) {
 	return pool.query`select TOP 1 DBV_VERSION from dbo.DBVERSION ORDER BY DBV_ID DESC`
 		.then(res => {
-			socket.emit('sbk_version', [sbk_data.sbkId, sbk_data.seusId, res.recordset[0]])
-		}
-		)
+			socket.emit("sbk_version", [
+				sbk_data.sbkId,
+				sbk_data.seusId,
+				res.recordset[0]
+			]);
+		})
 		.catch(err => {
 			log.error(err);
 			sbk_data.err.push(err);
@@ -229,7 +274,7 @@ function getLastEvTypeStatus(pool) {
 			socket.emit("EvTypeStatus", [
 				sbk_data.sbkId,
 				sbk_data.seusId,
-				{evTypeStatus: res.recordset}
+				{ evTypeStatus: res.recordset }
 			]);
 		})
 		.catch(err => {
